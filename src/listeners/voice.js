@@ -12,21 +12,48 @@ const db = require("../utils/db");
 const streamPipeline = promisify(pipeline);
 
 /**
- * Convertit un fichier PCM en WAV
+ * Convertit un fichier PCM en WAV compatible avec Whisper (16kHz, mono, 16-bit)
  * @param {string} pcmPath - Chemin du fichier PCM
  * @param {string} wavPath - Chemin de sortie du fichier WAV
  */
 async function convertPCMtoWAV(pcmPath, wavPath) {
-  const pcmData = await fs.promises.readFile(pcmPath);
+  try {
+    const pcmData = await fs.promises.readFile(pcmPath);
+    const wav = new WaveFile();
 
-  // Créer un nouveau fichier WAV
-  const wav = new WaveFile();
+    // Le PCM d'origine est 48kHz stereo 16-bit
+    // Convertissons-le en mono d'abord
+    const samples = new Int16Array(pcmData.buffer);
+    const monoSamples = new Int16Array(samples.length / 2);
 
-  // Configurer le format WAV avec les paramètres du PCM (16-bit, 48kHz, 2 canaux)
-  wav.fromScratch(2, 48000, "16", pcmData);
+    // Conversion stéréo vers mono en faisant la moyenne des canaux
+    for (let i = 0; i < monoSamples.length; i++) {
+      monoSamples[i] = Math.round((samples[i * 2] + samples[i * 2 + 1]) / 2);
+    }
 
-  // Sauvegarder le fichier WAV
-  await fs.promises.writeFile(wavPath, wav.toBuffer());
+    // On garde un échantillon sur 3 pour passer de 48kHz à 16kHz
+    const downsampledLength = Math.floor(monoSamples.length / 3);
+    const downsampledSamples = new Int16Array(downsampledLength);
+
+    for (let i = 0; i < downsampledLength; i++) {
+      downsampledSamples[i] = monoSamples[i * 3];
+    }
+
+    // Création du WAV avec les nouveaux paramètres
+    wav.fromScratch(
+      1, // mono
+      16000, // 16kHz
+      "16", // 16-bit
+      Buffer.from(downsampledSamples.buffer)
+    );
+
+    // Sauvegarde du fichier WAV
+    await fs.promises.writeFile(wavPath, wav.toBuffer());
+    logger.info(`WAV converti avec succès: ${wavPath} (16kHz, mono, 16-bit)`);
+  } catch (error) {
+    logger.error(`Erreur lors de la conversion WAV : ${error.message}`);
+    throw error;
+  }
 }
 
 /**
@@ -65,7 +92,7 @@ function setupVoiceListeners(connection) {
         `Audio enregistré pour l'utilisateur ${userId} dans le fichier ${pcmFilePath}`
       );
 
-      // Conversion en WAV
+      // Conversion en WAV compatible Whisper
       await convertPCMtoWAV(pcmFilePath, wavFilePath);
       logger.info(`Audio converti en WAV pour l'utilisateur ${userId}`);
 
