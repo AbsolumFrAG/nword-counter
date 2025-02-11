@@ -21,23 +21,28 @@ RUN apt-get update && apt-get install -y \
 # Installation de pnpm
 RUN npm install -g pnpm@latest
 
-# Configuration de pnpm pour les builds
-RUN pnpm config set enable-pre-post-scripts true \
-    && pnpm config set unsafe-perm true
-
-# Copie des fichiers de dépendances
-COPY package*.json ./
-
 # Configuration de l'environnement pour la compilation
 ENV npm_config_build_from_source=true
 ENV npm_config_sqlite=/usr
 ENV CFLAGS="-O2"
 ENV CXXFLAGS="-O2"
 
-# Installation des dépendances
-RUN pnpm install --no-frozen-lockfile \
-    && pnpm install sqlite3 --no-frozen-lockfile \
-    && pnpm rebuild
+# Copie des fichiers de dépendances
+COPY package*.json ./
+
+# Configure pnpm
+RUN pnpm config set enable-pre-post-scripts true && \
+    pnpm config set unsafe-perm true
+
+# Installation et compilation des dépendances
+RUN pnpm install && \
+    pnpm rebuild && \
+    pnpm add -g node-gyp && \
+    cd node_modules/sqlite3 && \
+    node-gyp configure && \
+    node-gyp build && \
+    cd ../.. && \
+    pnpm approve-builds sqlite3 @discordjs/opus
 
 # Copie du reste du code source
 COPY . .
