@@ -18,30 +18,26 @@ RUN apt-get update && apt-get install -y \
     opus-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Installation de pnpm et node-gyp
-RUN npm install -g pnpm node-gyp
+# Installation de pnpm
+RUN npm install -g pnpm@latest
 
-# Configuration de node-gyp
-ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
+# Configuration de pnpm pour les builds
+RUN pnpm config set enable-pre-post-scripts true \
+    && pnpm config set unsafe-perm true
 
 # Copie des fichiers de dépendances
 COPY package*.json ./
 
-# Variables d'environnement pour la compilation
-ENV CFLAGS="-O2"
-ENV CXXFLAGS="-O2"
+# Configuration de l'environnement pour la compilation
 ENV npm_config_build_from_source=true
 ENV npm_config_sqlite=/usr
-ENV JOBS=max
+ENV CFLAGS="-O2"
+ENV CXXFLAGS="-O2"
 
-# Configuration de pnpm pour autoriser les builds
-RUN pnpm config set enable-pre-post-scripts true
-RUN pnpm config set unsafe-perm true
-
-# Installation des dépendances avec pnpm
-RUN pnpm install \
-    && pnpm rebuild @discordjs/opus \
-    && pnpm rebuild sqlite3
+# Installation des dépendances
+RUN pnpm install --no-frozen-lockfile \
+    && pnpm install sqlite3 --no-frozen-lockfile \
+    && pnpm rebuild
 
 # Copie du reste du code source
 COPY . .
