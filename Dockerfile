@@ -10,21 +10,30 @@ RUN apt-get update && apt-get install -y \
     g++ \
     sqlite3 \
     libsqlite3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Installation de pnpm
-RUN npm install -g pnpm
+# Installation de pnpm et node-gyp
+RUN npm install -g pnpm node-gyp
+
+# Configuration de node-gyp
+ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
 
 # Copie des fichiers de dépendances
 COPY package*.json ./
 
-# Installation des dépendances avec pnpm, en forçant la compilation de sqlite3
+# Variables d'environnement pour la compilation
 ENV CFLAGS="-O2"
 ENV CXXFLAGS="-O2"
 ENV npm_config_build_from_source=true
+ENV npm_config_sqlite=/usr
+ENV JOBS=max
 
-# Installation sans --frozen-lockfile pour permettre la mise à jour du lockfile
-RUN pnpm install
+# Installation des dépendances
+RUN pnpm install && \
+    cd node_modules/sqlite3 && \
+    node-gyp rebuild && \
+    cd ../..
 
 # Copie du reste du code source
 COPY . .
