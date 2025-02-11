@@ -1,36 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const { pipeline } = require("stream");
-const { promisify } = require("util");
 const { EndBehaviorType } = require("@discordjs/voice");
-const opus = require("@discordjs/opus");
 const ffmpeg = require("fluent-ffmpeg");
 const whisper = require("../utils/whisper");
 const logger = require("../utils/logger");
 const db = require("../utils/db");
-
-const streamPipeline = promisify(pipeline);
-
-function convertPCMtoWAV(pcmPath, wavPath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg()
-      .input(pcmPath)
-      .inputOptions(["-f s16le", "-ar 48000", "-ac 2"])
-      .outputOptions(["-acodec pcm_s16le", "-ar 16000", "-ac 1"])
-      .on("start", (commandLine) => {
-        logger.info("Commande FFmpeg: " + commandLine);
-      })
-      .on("error", (err) => {
-        logger.error("Erreur FFmpeg: " + err.message);
-        reject(err);
-      })
-      .on("end", () => {
-        logger.info("Conversion FFmpeg terminée");
-        resolve();
-      })
-      .save(wavPath);
-  });
-}
 
 function setupVoiceListeners(connection) {
   connection.receiver.speaking.on("start", async (userId) => {
@@ -41,7 +15,6 @@ function setupVoiceListeners(connection) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const pcmFilePath = path.join(tempDir, `audio-${userId}-${Date.now()}.pcm`);
     const wavFilePath = path.join(tempDir, `audio-${userId}-${Date.now()}.wav`);
 
     try {
@@ -49,26 +22,36 @@ function setupVoiceListeners(connection) {
         end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 },
       });
 
-      // Création d'un décodeur Opus natif
-      const decoder = new opus.OpusEncoder(48000, 2);
-      decoder.setBitrate(128000);
+      const writeStream = fs.createWriteStream(wavFilePath);
 
-      const writeStream = fs.createWriteStream(pcmFilePath);
+      // Conversion directe de l'Opus en WAV avec FFmpeg
+      ffmpeg(opusStream)
+        .fromFormat("opus")
+        .toFormat("wav")
+        .outputOptions([
+          "-ar 16000", // Fréquence d'échantillonnage: 16kHz
+          "-ac 1", // Mono
+        ])
+        .on("error", (error) => {
+          logger.error(`Erreur FFmpeg: ${error.message}`);
+          throw error;
+        })
+        .pipe(writeStream);
 
-      // Transformation du flux Opus en PCM
-      await streamPipeline(opusStream, writeStream);
+      // Attendre que la conversion soit terminée
+      await new Promise((resolve, reject) => {
+        writeStream.on("finish", resolve);
+        writeStream.on("error", reject);
+      });
 
-      logger.info(`Audio enregistré pour l'utilisateur ${userId}`);
+      logger.info(`Audio enregistré et converti pour l'utilisateur ${userId}`);
 
-      // Vérification de la taille du fichier PCM
-      const stats = await fs.promises.stat(pcmFilePath);
+      // Vérification de la taille du fichier
+      const stats = await fs.promises.stat(wavFilePath);
       if (stats.size < 1024) {
         logger.warn("Fichier audio trop petit, ignoré");
         return;
       }
-
-      // Conversion PCM vers WAV avec FFmpeg
-      await convertPCMtoWAV(pcmFilePath, wavFilePath);
 
       // Transcription
       const transcription = await whisper.transcribeAudio(wavFilePath);
@@ -85,18 +68,16 @@ function setupVoiceListeners(connection) {
     } catch (error) {
       logger.error(`Erreur lors du traitement de l'audio: ${error.message}`);
     } finally {
-      // Nettoyage des fichiers temporaires
-      for (const file of [pcmFilePath, wavFilePath]) {
-        try {
-          if (fs.existsSync(file)) {
-            await fs.promises.unlink(file);
-            logger.info(`Fichier ${file} supprimé`);
-          }
-        } catch (err) {
-          logger.error(
-            `Erreur lors de la suppression de ${file}: ${err.message}`
-          );
+      // Nettoyage du fichier temporaire
+      try {
+        if (fs.existsSync(wavFilePath)) {
+          await fs.promises.unlink(wavFilePath);
+          logger.info(`Fichier ${wavFilePath} supprimé`);
         }
+      } catch (err) {
+        logger.error(
+          `Erreur lors de la suppression de ${wavFilePath}: ${err.message}`
+        );
       }
     }
   });
