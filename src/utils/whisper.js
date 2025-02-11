@@ -1,6 +1,5 @@
 const fs = require("fs");
 const FormData = require("form-data");
-const { Readable } = require("stream");
 const logger = require("./logger");
 
 const API_BASE_URL = process.env.WHISPER_API_URL || "http://localhost:9000";
@@ -48,7 +47,6 @@ const transcriptionQueue = new TranscriptionQueue();
 
 async function callWhisperAPI(audioFilePath) {
   try {
-    // Créer un FormData avec le bon boundary
     const form = new FormData();
     const fileBuffer = await fs.promises.readFile(audioFilePath);
     form.append("audio_file", fileBuffer, {
@@ -56,17 +54,12 @@ async function callWhisperAPI(audioFilePath) {
       contentType: "audio/wav",
     });
 
-    // Obtenir les headers avec le boundary
-    const formHeaders = form.getHeaders();
-
+    // Utiliser le stream de FormData directement
     const response = await fetch(
       `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
       {
         method: "POST",
-        headers: {
-          ...formHeaders,
-        },
-        body: Readable.from(form),
+        body: form,
       }
     );
 
@@ -106,11 +99,6 @@ async function transcribeAudio(audioFilePath) {
     // Afficher la taille du fichier
     const stats = await fs.promises.stat(audioFilePath);
     logger.info(`Taille du fichier audio : ${stats.size} octets`);
-
-    // Vérifier l'en-tête du fichier WAV
-    const fileContent = await fs.promises.readFile(audioFilePath);
-    const header = fileContent.slice(0, 12);
-    logger.info(`En-tête du fichier : ${header.toString("hex")}`);
 
     const transcription = await transcriptionQueue.enqueue(async () => {
       logger.info(`Début de la transcription de l'audio : ${audioFilePath}`);
