@@ -13,13 +13,8 @@ RUN apt-get update && apt-get install -y \
     autoconf \
     gcc \
     libopus-dev \
-    software-properties-common \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Installation de FFmpeg depuis le dépôt
-RUN apt-get update && apt-get install -y \
     ffmpeg \
+    opus-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
