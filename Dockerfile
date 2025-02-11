@@ -34,14 +34,14 @@ ENV npm_config_build_from_source=true
 ENV npm_config_sqlite=/usr
 ENV JOBS=max
 
-# Installation des dépendances avec rebuild explicite des modules natifs
-RUN pnpm install && \
-    cd node_modules/sqlite3 && \
-    node-gyp rebuild && \
-    cd ../.. && \
-    cd node_modules/@discordjs/opus && \
-    node-gyp rebuild && \
-    cd ../..
+# Configuration de pnpm pour autoriser les builds
+RUN pnpm config set enable-pre-post-scripts true
+RUN pnpm config set unsafe-perm true
+
+# Installation des dépendances avec pnpm
+RUN pnpm install \
+    && pnpm rebuild @discordjs/opus \
+    && pnpm rebuild sqlite3
 
 # Copie du reste du code source
 COPY . .
