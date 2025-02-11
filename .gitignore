@@ -1,0 +1,26 @@
+# Dépendances
+node_modules/
+
+# Fichiers d'environnement
+.env
+
+# Base de données
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Système d'exploitation
+.DS_Store
+Thumbs.db
+
+# Cache Whisper
+.cache/
+models/
+
+# Temp files
+temp/

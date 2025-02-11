@@ -1,0 +1,23 @@
+services:
+  nword-counter:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+      - GUILD_ID=${GUILD_ID}
+      - WHISPER_API_URL=http://whisper:9000
+    depends_on:
+      - whisper
+    restart: unless-stopped
+
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    ports:
+      - "9000:9000"
+    environment:
+      - ASR_MODEL=small
+      - ASR_ENGINE=openai_whisper
+    restart: unless-stopped
