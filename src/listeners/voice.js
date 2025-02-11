@@ -4,7 +4,7 @@ const { pipeline } = require("stream");
 const { promisify } = require("util");
 const { EndBehaviorType } = require("@discordjs/voice");
 const prism = require("prism-media");
-const { WaveFile } = require("wavefile");
+const ffmpeg = require("fluent-ffmpeg");
 const whisper = require("../utils/whisper");
 const logger = require("../utils/logger");
 const db = require("../utils/db");
@@ -12,91 +12,37 @@ const db = require("../utils/db");
 const streamPipeline = promisify(pipeline);
 
 /**
- * Convertit un fichier PCM en WAV compatible avec Whisper (16kHz, mono, 16-bit)
+ * Convertit un fichier PCM en WAV en utilisant FFmpeg
  * @param {string} pcmPath - Chemin du fichier PCM
  * @param {string} wavPath - Chemin de sortie du fichier WAV
  */
-async function convertPCMtoWAV(pcmPath, wavPath) {
-  try {
-    // Log de débogage du PCM
-    const pcmData = await fs.promises.readFile(pcmPath);
-    logger.info(`PCM brut lu : ${pcmData.length} octets`);
-
-    // Vérification que le PCM n'est pas vide ou trop petit
-    if (pcmData.length < 1024) {
-      logger.warn("PCM trop petit, probablement pas d'audio valide");
-      throw new Error("PCM trop petit");
-    }
-
-    // Vérification des données PCM
-    const samples = new Int16Array(pcmData.buffer);
-    logger.info(`Nombre d'échantillons PCM : ${samples.length}`);
-
-    // Vérification du niveau audio (RMS)
-    let rms = 0;
-    for (let i = 0; i < samples.length; i++) {
-      rms += samples[i] * samples[i];
-    }
-    rms = Math.sqrt(rms / samples.length);
-    logger.info(`Niveau RMS du signal : ${rms}`);
-
-    if (rms < 100) {
-      // Seuil arbitraire, à ajuster
-      logger.warn("Niveau audio très bas");
-    }
-
-    // Conversion stéréo vers mono
-    const monoSamples = new Int16Array(samples.length / 2);
-    for (let i = 0; i < monoSamples.length; i++) {
-      monoSamples[i] = Math.round((samples[i * 2] + samples[i * 2 + 1]) / 2);
-    }
-    logger.info(`Échantillons mono : ${monoSamples.length}`);
-
-    // Sous-échantillonnage de 48kHz à 16kHz
-    const downsampledLength = Math.floor(monoSamples.length / 3);
-    const downsampledSamples = new Int16Array(downsampledLength);
-    for (let i = 0; i < downsampledLength; i++) {
-      downsampledSamples[i] = monoSamples[i * 3];
-    }
-    logger.info(
-      `Échantillons après sous-échantillonnage : ${downsampledSamples.length}`
-    );
-
-    // Normalisation du signal (amplification)
-    let maxSample = 0;
-    for (let i = 0; i < downsampledSamples.length; i++) {
-      maxSample = Math.max(maxSample, Math.abs(downsampledSamples[i]));
-    }
-
-    const normalizationFactor = maxSample > 0 ? 32767 / maxSample : 1;
-    for (let i = 0; i < downsampledSamples.length; i++) {
-      downsampledSamples[i] = Math.round(
-        downsampledSamples[i] * normalizationFactor
-      );
-    }
-
-    // Création du WAV
-    const wav = new WaveFile();
-    wav.fromScratch(1, 16000, "16", Buffer.from(downsampledSamples.buffer));
-
-    // Vérification du WAV avant sauvegarde
-    logger.info(
-      `Format WAV : ${wav.fmt.numChannels} canaux, ${wav.fmt.sampleRate}Hz, ${wav.fmt.bitsPerSample} bits`
-    );
-    logger.info(`Taille des données WAV : ${wav.data.samples.length} octets`);
-
-    // Sauvegarde du WAV
-    await fs.promises.writeFile(wavPath, wav.toBuffer());
-
-    // Vérification finale du fichier sauvegardé
-    const stats = await fs.promises.stat(wavPath);
-    logger.info(`Fichier WAV écrit : ${stats.size} octets`);
-
-    return stats.size > 1024; // Retourne true si le fichier est suffisamment grand
-  } catch (error) {
-    logger.error(`Erreur lors de la conversion WAV : ${error.message}`);
-    throw error;
-  }
+function convertPCMtoWAV(pcmPath, wavPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(pcmPath)
+      .inputOptions([
+        "-f s16le", // Format d'entrée: PCM 16-bit little-endian
+        "-ar 48000", // Fréquence d'échantillonnage d'entrée: 48kHz
+        "-ac 2", // Nombre de canaux d'entrée: 2 (stéréo)
+      ])
+      .outputOptions([
+        "-acodec pcm_s16le", // Codec de sortie: PCM 16-bit
+        "-ar 16000", // Fréquence d'échantillonnage de sortie: 16kHz
+        "-ac 1", // Nombre de canaux de sortie: 1 (mono)
+      ])
+      .on("start", (commandLine) => {
+        logger.info("Commande FFmpeg: " + commandLine);
+      })
+      .on("error", (err) => {
+        logger.error("Erreur FFmpeg: " + err.message);
+        reject(err);
+      })
+      .on("end", () => {
+        logger.info("Conversion FFmpeg terminée");
+        resolve();
+      })
+      .save(wavPath);
+  });
 }
 
 /**
@@ -127,22 +73,27 @@ function setupVoiceListeners(connection) {
     const writeStream = fs.createWriteStream(pcmFilePath);
 
     try {
+      // Enregistrement du PCM
       await streamPipeline(opusStream, decoder, writeStream);
       logger.info(`Audio enregistré pour l'utilisateur ${userId}`);
 
-      // Conversion en WAV et vérification si l'audio est valide
-      const isValidAudio = await convertPCMtoWAV(pcmFilePath, wavFilePath);
-
-      if (!isValidAudio) {
-        logger.warn("Audio ignoré car trop court ou invalide");
+      // Vérification de la taille du fichier PCM
+      const stats = await fs.promises.stat(pcmFilePath);
+      if (stats.size < 1024) {
+        logger.warn("Fichier audio trop petit, ignoré");
         return;
       }
 
+      // Conversion PCM vers WAV avec FFmpeg
+      await convertPCMtoWAV(pcmFilePath, wavFilePath);
+
+      // Transcription
       const transcription = await whisper.transcribeAudio(wavFilePath);
       logger.info(
         `Transcription pour l'utilisateur ${userId}: ${transcription}`
       );
 
+      // Détection du n-word
       const nWordRegex = /\b(nigg(?:a|er))\b/i;
       if (nWordRegex.test(transcription)) {
         logger.warn(`N-word détecté pour l'utilisateur ${userId}`);
@@ -151,7 +102,7 @@ function setupVoiceListeners(connection) {
     } catch (error) {
       logger.error(`Erreur lors du traitement de l'audio: ${error.message}`);
     } finally {
-      // Nettoyage
+      // Nettoyage des fichiers temporaires
       for (const file of [pcmFilePath, wavFilePath]) {
         try {
           await fs.promises.unlink(file);
