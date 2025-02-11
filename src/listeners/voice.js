@@ -94,7 +94,7 @@ function setupVoiceListeners(connection) {
       );
 
       // Détection du n-word
-      const nWordRegex = /\b(nigg(?:a|er))\b/i;
+      const nWordRegex = /\b(n[ie]g(?:g(?:a|er)|ro|nouf)s?)\b/i;
       if (nWordRegex.test(transcription)) {
         logger.warn(`N-word détecté pour l'utilisateur ${userId}`);
         await db.incrementUserCount(userId, userId, 1);
