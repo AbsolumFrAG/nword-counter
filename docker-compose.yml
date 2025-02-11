@@ -1,5 +1,5 @@
 services:
-  nword-counter:
+  bot:
     build: .
     volumes:
       - ./data:/app/data
