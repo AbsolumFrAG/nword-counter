@@ -26,7 +26,7 @@ COPY package.json pnpm-lock.yaml ./
 # Installation des dépendances
 RUN pnpm install --unsafe-perm \
     && pnpm rebuild @discordjs/opus \
-    && pnpm add fluent-ffmpeg
+    && pnpm add node-opus opusscript
 
 # Copie du reste du code source
 COPY . .
