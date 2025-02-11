@@ -3,7 +3,7 @@ const path = require("path");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
 const { EndBehaviorType } = require("@discordjs/voice");
-const prism = require("prism-media");
+const opus = require("@discordjs/opus");
 const ffmpeg = require("fluent-ffmpeg");
 const whisper = require("../utils/whisper");
 const logger = require("../utils/logger");
@@ -11,25 +11,12 @@ const db = require("../utils/db");
 
 const streamPipeline = promisify(pipeline);
 
-/**
- * Convertit un fichier PCM en WAV en utilisant FFmpeg
- * @param {string} pcmPath - Chemin du fichier PCM
- * @param {string} wavPath - Chemin de sortie du fichier WAV
- */
 function convertPCMtoWAV(pcmPath, wavPath) {
   return new Promise((resolve, reject) => {
     ffmpeg()
       .input(pcmPath)
-      .inputOptions([
-        "-f s16le", // Format d'entrée: PCM 16-bit little-endian
-        "-ar 48000", // Fréquence d'échantillonnage d'entrée: 48kHz
-        "-ac 2", // Nombre de canaux d'entrée: 2 (stéréo)
-      ])
-      .outputOptions([
-        "-acodec pcm_s16le", // Codec de sortie: PCM 16-bit
-        "-ar 16000", // Fréquence d'échantillonnage de sortie: 16kHz
-        "-ac 1", // Nombre de canaux de sortie: 1 (mono)
-      ])
+      .inputOptions(["-f s16le", "-ar 48000", "-ac 2"])
+      .outputOptions(["-acodec pcm_s16le", "-ar 16000", "-ac 1"])
       .on("start", (commandLine) => {
         logger.info("Commande FFmpeg: " + commandLine);
       })
@@ -45,9 +32,6 @@ function convertPCMtoWAV(pcmPath, wavPath) {
   });
 }
 
-/**
- * Met en place les écouteurs d'événements pour traiter l'audio.
- */
 function setupVoiceListeners(connection) {
   connection.receiver.speaking.on("start", async (userId) => {
     logger.info(`L'utilisateur ${userId} a commencé à parler.`);
@@ -60,21 +44,20 @@ function setupVoiceListeners(connection) {
     const pcmFilePath = path.join(tempDir, `audio-${userId}-${Date.now()}.pcm`);
     const wavFilePath = path.join(tempDir, `audio-${userId}-${Date.now()}.wav`);
 
-    const opusStream = connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 },
-    });
-
-    const decoder = new prism.opus.Decoder({
-      frameSize: 960,
-      channels: 2,
-      rate: 48000,
-    });
-
-    const writeStream = fs.createWriteStream(pcmFilePath);
-
     try {
-      // Enregistrement du PCM
-      await streamPipeline(opusStream, decoder, writeStream);
+      const opusStream = connection.receiver.subscribe(userId, {
+        end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 },
+      });
+
+      // Création d'un décodeur Opus natif
+      const decoder = new opus.OpusEncoder(48000, 2);
+      decoder.setBitrate(128000);
+
+      const writeStream = fs.createWriteStream(pcmFilePath);
+
+      // Transformation du flux Opus en PCM
+      await streamPipeline(opusStream, writeStream);
+
       logger.info(`Audio enregistré pour l'utilisateur ${userId}`);
 
       // Vérification de la taille du fichier PCM
@@ -93,8 +76,8 @@ function setupVoiceListeners(connection) {
         `Transcription pour l'utilisateur ${userId}: ${transcription}`
       );
 
-      // Détection du n-word
-      const nWordRegex = /\b(n[ie]g(?:g(?:a|er)|ro|nouf)s?)\b/i;
+      // Détection du n-word (en anglais et en français)
+      const nWordRegex = /\b(n[ieé]g(?:g(?:a|er)|ro|nouf)s?)\b/i;
       if (nWordRegex.test(transcription)) {
         logger.warn(`N-word détecté pour l'utilisateur ${userId}`);
         await db.incrementUserCount(userId, userId, 1);
@@ -105,7 +88,10 @@ function setupVoiceListeners(connection) {
       // Nettoyage des fichiers temporaires
       for (const file of [pcmFilePath, wavFilePath]) {
         try {
-          await fs.promises.unlink(file);
+          if (fs.existsSync(file)) {
+            await fs.promises.unlink(file);
+            logger.info(`Fichier ${file} supprimé`);
+          }
         } catch (err) {
           logger.error(
             `Erreur lors de la suppression de ${file}: ${err.message}`
