@@ -18,38 +18,81 @@ const streamPipeline = promisify(pipeline);
  */
 async function convertPCMtoWAV(pcmPath, wavPath) {
   try {
+    // Log de débogage du PCM
     const pcmData = await fs.promises.readFile(pcmPath);
-    const wav = new WaveFile();
+    logger.info(`PCM brut lu : ${pcmData.length} octets`);
 
-    // Le PCM d'origine est 48kHz stereo 16-bit
-    // Convertissons-le en mono d'abord
+    // Vérification que le PCM n'est pas vide ou trop petit
+    if (pcmData.length < 1024) {
+      logger.warn("PCM trop petit, probablement pas d'audio valide");
+      throw new Error("PCM trop petit");
+    }
+
+    // Vérification des données PCM
     const samples = new Int16Array(pcmData.buffer);
-    const monoSamples = new Int16Array(samples.length / 2);
+    logger.info(`Nombre d'échantillons PCM : ${samples.length}`);
 
-    // Conversion stéréo vers mono en faisant la moyenne des canaux
+    // Vérification du niveau audio (RMS)
+    let rms = 0;
+    for (let i = 0; i < samples.length; i++) {
+      rms += samples[i] * samples[i];
+    }
+    rms = Math.sqrt(rms / samples.length);
+    logger.info(`Niveau RMS du signal : ${rms}`);
+
+    if (rms < 100) {
+      // Seuil arbitraire, à ajuster
+      logger.warn("Niveau audio très bas");
+    }
+
+    // Conversion stéréo vers mono
+    const monoSamples = new Int16Array(samples.length / 2);
     for (let i = 0; i < monoSamples.length; i++) {
       monoSamples[i] = Math.round((samples[i * 2] + samples[i * 2 + 1]) / 2);
     }
+    logger.info(`Échantillons mono : ${monoSamples.length}`);
 
-    // On garde un échantillon sur 3 pour passer de 48kHz à 16kHz
+    // Sous-échantillonnage de 48kHz à 16kHz
     const downsampledLength = Math.floor(monoSamples.length / 3);
     const downsampledSamples = new Int16Array(downsampledLength);
-
     for (let i = 0; i < downsampledLength; i++) {
       downsampledSamples[i] = monoSamples[i * 3];
     }
-
-    // Création du WAV avec les nouveaux paramètres
-    wav.fromScratch(
-      1, // mono
-      16000, // 16kHz
-      "16", // 16-bit
-      Buffer.from(downsampledSamples.buffer)
+    logger.info(
+      `Échantillons après sous-échantillonnage : ${downsampledSamples.length}`
     );
 
-    // Sauvegarde du fichier WAV
+    // Normalisation du signal (amplification)
+    let maxSample = 0;
+    for (let i = 0; i < downsampledSamples.length; i++) {
+      maxSample = Math.max(maxSample, Math.abs(downsampledSamples[i]));
+    }
+
+    const normalizationFactor = maxSample > 0 ? 32767 / maxSample : 1;
+    for (let i = 0; i < downsampledSamples.length; i++) {
+      downsampledSamples[i] = Math.round(
+        downsampledSamples[i] * normalizationFactor
+      );
+    }
+
+    // Création du WAV
+    const wav = new WaveFile();
+    wav.fromScratch(1, 16000, "16", Buffer.from(downsampledSamples.buffer));
+
+    // Vérification du WAV avant sauvegarde
+    logger.info(
+      `Format WAV : ${wav.fmt.numChannels} canaux, ${wav.fmt.sampleRate}Hz, ${wav.fmt.bitsPerSample} bits`
+    );
+    logger.info(`Taille des données WAV : ${wav.data.samples.length} octets`);
+
+    // Sauvegarde du WAV
     await fs.promises.writeFile(wavPath, wav.toBuffer());
-    logger.info(`WAV converti avec succès: ${wavPath} (16kHz, mono, 16-bit)`);
+
+    // Vérification finale du fichier sauvegardé
+    const stats = await fs.promises.stat(wavPath);
+    logger.info(`Fichier WAV écrit : ${stats.size} octets`);
+
+    return stats.size > 1024; // Retourne true si le fichier est suffisamment grand
   } catch (error) {
     logger.error(`Erreur lors de la conversion WAV : ${error.message}`);
     throw error;
@@ -57,14 +100,12 @@ async function convertPCMtoWAV(pcmPath, wavPath) {
 }
 
 /**
- * Met en place les écouteurs d'événements pour traiter l'audio des utilisateurs dans un salon vocal.
- * @param {VoiceConnection} connection - L'instance de connexion au salon vocal.
+ * Met en place les écouteurs d'événements pour traiter l'audio.
  */
 function setupVoiceListeners(connection) {
   connection.receiver.speaking.on("start", async (userId) => {
     logger.info(`L'utilisateur ${userId} a commencé à parler.`);
 
-    // Création du dossier temporaire s'il n'existe pas
     const tempDir = path.resolve(__dirname, "../../temp");
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -86,44 +127,39 @@ function setupVoiceListeners(connection) {
     const writeStream = fs.createWriteStream(pcmFilePath);
 
     try {
-      // Enregistrement du PCM
       await streamPipeline(opusStream, decoder, writeStream);
-      logger.info(
-        `Audio enregistré pour l'utilisateur ${userId} dans le fichier ${pcmFilePath}`
-      );
+      logger.info(`Audio enregistré pour l'utilisateur ${userId}`);
 
-      // Conversion en WAV compatible Whisper
-      await convertPCMtoWAV(pcmFilePath, wavFilePath);
-      logger.info(`Audio converti en WAV pour l'utilisateur ${userId}`);
+      // Conversion en WAV et vérification si l'audio est valide
+      const isValidAudio = await convertPCMtoWAV(pcmFilePath, wavFilePath);
 
-      // Transcription de l'audio via Whisper
+      if (!isValidAudio) {
+        logger.warn("Audio ignoré car trop court ou invalide");
+        return;
+      }
+
       const transcription = await whisper.transcribeAudio(wavFilePath);
       logger.info(
         `Transcription pour l'utilisateur ${userId}: ${transcription}`
       );
 
-      // Détection du n-word
       const nWordRegex = /\b(nigg(?:a|er))\b/i;
       if (nWordRegex.test(transcription)) {
         logger.warn(`N-word détecté pour l'utilisateur ${userId}`);
         await db.incrementUserCount(userId, userId, 1);
       }
     } catch (error) {
-      logger.error(
-        `Erreur lors du traitement de l'audio pour l'utilisateur ${userId}: ${error.message}`
-      );
+      logger.error(`Erreur lors du traitement de l'audio: ${error.message}`);
     } finally {
-      // Nettoyage des fichiers temporaires
-      try {
-        await fs.promises.unlink(pcmFilePath);
-        await fs.promises.unlink(wavFilePath);
-        logger.info(
-          `Fichiers temporaires supprimés pour l'utilisateur ${userId}`
-        );
-      } catch (err) {
-        logger.error(
-          `Erreur lors de la suppression des fichiers temporaires: ${err.message}`
-        );
+      // Nettoyage
+      for (const file of [pcmFilePath, wavFilePath]) {
+        try {
+          await fs.promises.unlink(file);
+        } catch (err) {
+          logger.error(
+            `Erreur lors de la suppression de ${file}: ${err.message}`
+          );
+        }
       }
     }
   });
