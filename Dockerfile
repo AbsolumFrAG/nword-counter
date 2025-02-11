@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y \
     sqlite3 \
     libsqlite3-dev \
     build-essential \
+    libtool \
+    autoconf \
+    automake \
+    libopus-dev \
+    opus-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Installation de pnpm et node-gyp
@@ -29,9 +34,12 @@ ENV npm_config_build_from_source=true
 ENV npm_config_sqlite=/usr
 ENV JOBS=max
 
-# Installation des dépendances
+# Installation des dépendances avec rebuild explicite des modules natifs
 RUN pnpm install && \
     cd node_modules/sqlite3 && \
+    node-gyp rebuild && \
+    cd ../.. && \
+    cd node_modules/@discordjs/opus && \
     node-gyp rebuild && \
     cd ../..
 
