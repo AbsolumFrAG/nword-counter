@@ -18,8 +18,14 @@ RUN apt-get update && apt-get install -y \
     opus-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Configuration de pnpm
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="${PNPM_HOME}:${PATH}"
+
 # Installation de pnpm
-RUN npm install -g pnpm@latest
+RUN npm install -g pnpm@latest \
+    && pnpm setup \
+    && npm install -g node-gyp
 
 # Configuration de l'environnement pour la compilation
 ENV npm_config_build_from_source=true
@@ -35,14 +41,13 @@ RUN pnpm config set enable-pre-post-scripts true && \
     pnpm config set unsafe-perm true
 
 # Installation et compilation des dépendances
-RUN pnpm install && \
-    pnpm rebuild && \
-    pnpm add -g node-gyp && \
+RUN pnpm install --ignore-scripts && \
     cd node_modules/sqlite3 && \
-    node-gyp configure && \
-    node-gyp build && \
+    node-gyp clean configure build && \
     cd ../.. && \
-    pnpm approve-builds sqlite3 @discordjs/opus
+    cd node_modules/@discordjs/opus && \
+    node-gyp clean configure build && \
+    cd ../..
 
 # Copie du reste du code source
 COPY . .
