@@ -55,17 +55,20 @@ async function callWhisperAPI(audioFilePath) {
     });
 
     logger.info("Envoi de la requête à Whisper API...");
-    const response = await axios.post(
-      `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
-      form,
-      {
-        headers: {
-          ...form.getHeaders(),
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      }
-    );
+    const response = await axios.post(`${API_BASE_URL}/asr`, form, {
+      params: {
+        language: API_LANGUAGE,
+        task: "transcribe",
+        output: "json",
+        word_timestamps: false,
+      },
+      headers: {
+        ...form.getHeaders(),
+        Accept: "application/json",
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
 
     logger.info(`Réponse de l'API Whisper: ${JSON.stringify(response.data)}`);
 
@@ -81,6 +84,9 @@ async function callWhisperAPI(audioFilePath) {
         `Erreur HTTP ${error.response.status}: ${JSON.stringify(
           error.response.data
         )}`
+      );
+      logger.error(
+        `Headers de réponse: ${JSON.stringify(error.response.headers)}`
       );
     } else if (error.request) {
       logger.error("Pas de réponse reçue du serveur");
