@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y \
     libtool \
     automake \
     autoconf \
-    libnmap-dev \
     gcc \
     libopus-dev \
     ffmpeg \
