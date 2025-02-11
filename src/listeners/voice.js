@@ -80,7 +80,7 @@ function setupVoiceListeners(connection) {
       );
 
       // Détection du n-word (en anglais et en français)
-      const nWordRegex = /\b(n[ie]g(?:g(?:a|er)|ro|nouf)s?)\b/i;
+      const nWordRegex = /\b(n[ieé]g(?:g(?:a|er)|ro|nouf)s?)\b/i;
       if (nWordRegex.test(transcription)) {
         logger.warn(`N-word détecté pour l'utilisateur ${userId}`);
         await db.incrementUserCount(userId, userId, 1);

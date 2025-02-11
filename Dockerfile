@@ -17,12 +17,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Installation de FFmpeg depuis le PPA pour avoir toutes les fonctionnalités
+# Installation de FFmpeg depuis le dépôt
 RUN apt-get update && apt-get install -y \
-    wget \
-    && wget -O - https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJf - -C /usr/local/bin --strip-components=1 --wildcards '*/ffmpeg' '*/ffprobe' \
-    && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
-    && apt-get remove -y wget \
+    ffmpeg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
