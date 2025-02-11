@@ -1,5 +1,6 @@
 const fs = require("fs");
 const FormData = require("form-data");
+const axios = require("axios");
 const logger = require("./logger");
 
 const API_BASE_URL = process.env.WHISPER_API_URL || "http://localhost:9000";
@@ -48,42 +49,43 @@ const transcriptionQueue = new TranscriptionQueue();
 async function callWhisperAPI(audioFilePath) {
   try {
     const form = new FormData();
-    const fileBuffer = await fs.promises.readFile(audioFilePath);
-    form.append("audio_file", fileBuffer, {
+    form.append("audio_file", fs.createReadStream(audioFilePath), {
       filename: "audio.wav",
       contentType: "audio/wav",
     });
 
-    // Utiliser le stream de FormData directement
-    const response = await fetch(
+    logger.info("Envoi de la requête à Whisper API...");
+    const response = await axios.post(
       `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
+      form,
       {
-        method: "POST",
-        body: form,
+        headers: {
+          ...form.getHeaders(),
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
       }
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`Erreur HTTP ${response.status}: ${errorText}`);
-      throw new Error(`Erreur HTTP ${response.status}: ${errorText}`);
-    }
+    logger.info(`Réponse de l'API Whisper: ${JSON.stringify(response.data)}`);
 
-    const result = await response.json();
-    logger.info(`Réponse de l'API Whisper: ${JSON.stringify(result)}`);
-
-    if (!result || !result.text) {
+    if (!response.data || !response.data.text) {
       logger.warn("La transcription renvoyée est vide");
       return "";
     }
 
-    return result.text;
+    return response.data.text;
   } catch (error) {
-    logger.error(
-      `Erreur détaillée lors de l'appel à Whisper: ${error.message}`
-    );
     if (error.response) {
-      logger.error(`Détails de la réponse: ${await error.response.text()}`);
+      logger.error(
+        `Erreur HTTP ${error.response.status}: ${JSON.stringify(
+          error.response.data
+        )}`
+      );
+    } else if (error.request) {
+      logger.error("Pas de réponse reçue du serveur");
+    } else {
+      logger.error(`Erreur lors de la requête: ${error.message}`);
     }
     throw error;
   }
