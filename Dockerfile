@@ -25,8 +25,7 @@ COPY package.json pnpm-lock.yaml ./
 
 # Installation des dépendances
 RUN pnpm install --unsafe-perm \
-    && pnpm rebuild @discordjs/opus \
-    && pnpm add node-opus opusscript
+    && pnpm rebuild @discordjs/opus
 
 # Copie du reste du code source
 COPY . .
