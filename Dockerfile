@@ -16,14 +16,15 @@ RUN apt-get update && apt-get install -y \
 RUN npm install -g pnpm
 
 # Copie des fichiers de dépendances
-COPY package*.json pnpm-lock.yaml ./
+COPY package*.json ./
 
 # Installation des dépendances avec pnpm, en forçant la compilation de sqlite3
 ENV CFLAGS="-O2"
 ENV CXXFLAGS="-O2"
 ENV npm_config_build_from_source=true
 
-RUN pnpm install --frozen-lockfile
+# Installation sans --frozen-lockfile pour permettre la mise à jour du lockfile
+RUN pnpm install
 
 # Copie du reste du code source
 COPY . .
