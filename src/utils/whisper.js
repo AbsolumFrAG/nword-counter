@@ -46,21 +46,16 @@ class TranscriptionQueue {
 const transcriptionQueue = new TranscriptionQueue();
 
 async function callWhisperAPI(audioFilePath) {
-  const formData = new FormData();
-  formData.append("audio_file", fs.createReadStream(audioFilePath), {
-    filename: "audio.wav",
-    contentType: "audio/wav",
-  });
-
   try {
+    const form = new FormData();
+    const fileStream = fs.createReadStream(audioFilePath);
+    form.append("audio_file", fileStream);
+
     const response = await fetch(
       `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
       {
         method: "POST",
-        body: formData,
-        headers: {
-          ...formData.getHeaders(),
-        },
+        body: form,
       }
     );
 
@@ -71,6 +66,7 @@ async function callWhisperAPI(audioFilePath) {
     }
 
     const result = await response.json();
+    logger.info(`Réponse de l'API Whisper: ${JSON.stringify(result)}`);
 
     if (!result || !result.text) {
       logger.warn("La transcription renvoyée est vide");
@@ -82,6 +78,9 @@ async function callWhisperAPI(audioFilePath) {
     logger.error(
       `Erreur détaillée lors de l'appel à Whisper: ${error.message}`
     );
+    if (error.response) {
+      logger.error(`Détails de la réponse: ${await error.response.text()}`);
+    }
     throw error;
   }
 }
@@ -96,6 +95,13 @@ async function transcribeAudio(audioFilePath) {
     // Afficher la taille du fichier
     const stats = await fs.promises.stat(audioFilePath);
     logger.info(`Taille du fichier audio : ${stats.size} octets`);
+
+    // Lire les premiers octets du fichier pour vérifier le format
+    const buffer = Buffer.alloc(12);
+    const fd = await fs.promises.open(audioFilePath, "r");
+    await fd.read(buffer, 0, 12, 0);
+    await fd.close();
+    logger.info(`En-tête du fichier : ${buffer.toString("hex")}`);
 
     const transcription = await transcriptionQueue.enqueue(async () => {
       logger.info(`Début de la transcription de l'audio : ${audioFilePath}`);
