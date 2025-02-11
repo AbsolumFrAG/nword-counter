@@ -1,55 +1,47 @@
-const sqlite3 = require("sqlite3").verbose();
-const path = require("path");
-const fs = require("fs");
+const { Pool } = require("pg");
+const logger = require("./logger");
 
-// Chemin vers le dossier contenant la base de données
-const dataFolder = path.resolve(__dirname, "../../data");
-// Vérification et création du dossier s'il n'existe pas
-if (!fs.existsSync(dataFolder)) {
-  fs.mkdirSync(dataFolder, { recursive: true });
-}
+// Configuration de la connexion PostgreSQL
+const pool = new Pool({
+  user: process.env.POSTGRES_USER,
+  host: process.env.POSTGRES_HOST,
+  database: process.env.POSTGRES_DB,
+  password: process.env.POSTGRES_PASSWORD,
+  port: process.env.POSTGRES_PORT || 5432,
+});
 
-// Chemin vers le fichier de base de données SQLite
-const dbPath = path.join(dataFolder, "database.sqlite");
-
-// Connexion à la base de données
-const db = new sqlite3.Database(dbPath, (err) => {
+// Test de la connexion
+pool.connect((err, client, release) => {
   if (err) {
-    console.error(
-      "Erreur lors de la connexion à la base de données:",
-      err.message
-    );
+    logger.error("Erreur lors de la connexion à PostgreSQL:", err.message);
   } else {
-    console.log("Connecté à la base de données SQLite.");
+    logger.info("Connecté à PostgreSQL avec succès");
+    release();
   }
 });
 
 /**
  * Initialise la base de données en créant la table user_stats si elle n'existe pas.
  */
-function initializeDatabase() {
-  db.serialize(() => {
-    db.run(
-      `
+async function initializeDatabase() {
+  try {
+    const createTableQuery = `
       CREATE TABLE IF NOT EXISTS user_stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         user_id TEXT UNIQUE,
         username TEXT,
         n_word_count INTEGER DEFAULT 0
       )
-    `,
-      (err) => {
-        if (err) {
-          console.error(
-            "Erreur lors de la création de la table user_stats:",
-            err.message
-          );
-        } else {
-          console.log("Table user_stats créée ou déjà existante.");
-        }
-      }
+    `;
+    await pool.query(createTableQuery);
+    logger.info("Table user_stats créée ou déjà existante.");
+  } catch (err) {
+    logger.error(
+      "Erreur lors de la création de la table user_stats:",
+      err.message
     );
-  });
+    throw err;
+  }
 }
 
 /**
@@ -61,28 +53,22 @@ function initializeDatabase() {
  * @param {number} [increment=1] La valeur d'incrémentation (par défaut 1)
  * @returns {Promise<void>}
  */
-function incrementUserCount(userId, username, increment = 1) {
-  return new Promise((resolve, reject) => {
-    // Utilisation d'un UPSERT pour insérer ou mettre à jour le compteur
-    db.run(
-      `
+async function incrementUserCount(userId, username, increment = 1) {
+  try {
+    const upsertQuery = `
       INSERT INTO user_stats (user_id, username, n_word_count)
-      VALUES (?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET n_word_count = n_word_count + ?
-      `,
-      [userId, username, increment, increment],
-      function (err) {
-        if (err) {
-          console.error(
-            "Erreur lors de l'incrémentation du compteur:",
-            err.message
-          );
-          return reject(err);
-        }
-        resolve();
-      }
+      VALUES ($1, $2, $3)
+      ON CONFLICT (user_id) 
+      DO UPDATE SET n_word_count = user_stats.n_word_count + $3
+    `;
+    await pool.query(upsertQuery, [userId, username, increment]);
+    logger.info(
+      `Compteur incrémenté pour l'utilisateur ${username} (${userId})`
     );
-  });
+  } catch (err) {
+    logger.error("Erreur lors de l'incrémentation du compteur:", err.message);
+    throw err;
+  }
 }
 
 /**
@@ -91,33 +77,39 @@ function incrementUserCount(userId, username, increment = 1) {
  * @param {number} [limit=10] Le nombre maximum d'utilisateurs à retourner (par défaut 10)
  * @returns {Promise<Array>} Tableau d'objets contenant { user_id, username, n_word_count }
  */
-function getLeaderboard(limit = 10) {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `
+async function getLeaderboard(limit = 10) {
+  try {
+    const query = `
       SELECT user_id, username, n_word_count
       FROM user_stats
       ORDER BY n_word_count DESC
-      LIMIT ?
-      `,
-      [limit],
-      (err, rows) => {
-        if (err) {
-          console.error(
-            "Erreur lors de la récupération du leaderboard:",
-            err.message
-          );
-          return reject(err);
-        }
-        resolve(rows);
-      }
-    );
-  });
+      LIMIT $1
+    `;
+    const { rows } = await pool.query(query, [limit]);
+    return rows;
+  } catch (err) {
+    logger.error("Erreur lors de la récupération du leaderboard:", err.message);
+    throw err;
+  }
+}
+
+/**
+ * Ferme proprement la connexion à la base de données
+ */
+async function closeConnection() {
+  try {
+    await pool.end();
+    logger.info("Connexion à la base de données fermée");
+  } catch (err) {
+    logger.error("Erreur lors de la fermeture de la connexion:", err.message);
+    throw err;
+  }
 }
 
 module.exports = {
   initializeDatabase,
   incrementUserCount,
   getLeaderboard,
-  db, // Export optionnel de la connexion, si besoin d'accès direct ailleurs
+  closeConnection,
+  pool, // Export du pool pour des cas d'utilisation spécifiques
 };

@@ -1,23 +1,47 @@
 services:
-  bot:
+  app:
     build: .
-    volumes:
-      - ./data:/app/data
-      - ./temp:/app/temp
+    env_file: .env
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - CLIENT_ID=${CLIENT_ID}
-      - GUILD_ID=${GUILD_ID}
-      - WHISPER_API_URL=http://whisper:9000
+      - POSTGRES_HOST=db
+      - WHISPER_API_URL=${WHISPER_API_URL}
     depends_on:
+      - db
       - whisper
+    restart: unless-stopped
+    networks:
+      - app-network
+    volumes:
+      - ./temp:/app/temp
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    ports:
+      - "5433:5433"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
     restart: unless-stopped
 
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
-    ports:
-      - "9000:9000"
     environment:
       - ASR_MODEL=small
       - ASR_ENGINE=openai_whisper
+    ports:
+      - "9000:9000"
+    networks:
+      - app-network
     restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
