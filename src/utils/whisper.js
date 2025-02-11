@@ -5,21 +5,13 @@ const logger = require("./logger");
 const API_BASE_URL = process.env.WHISPER_API_URL || "http://localhost:9000";
 const API_LANGUAGE = "fr";
 
-/**
- * Classe gérant une queue de tâches de transcription
- */
 class TranscriptionQueue {
   constructor() {
     this.queue = [];
     this.isProcessing = false;
   }
 
-  /**
-   * Ajoute une tâche à la queue et retourne une promesse
-   * @param {Function} task - La fonction à exécuter
-   * @returns {Promise} Une promesse qui sera résolue quand la tâche sera terminée
-   */
-  enqueue(task) {
+  async enqueue(task) {
     return new Promise((resolve, reject) => {
       this.queue.push({
         task,
@@ -31,9 +23,6 @@ class TranscriptionQueue {
     });
   }
 
-  /**
-   * Traite la queue de manière séquentielle
-   */
   async processQueue() {
     if (this.isProcessing || this.queue.length === 0) {
       return;
@@ -54,62 +43,66 @@ class TranscriptionQueue {
   }
 }
 
-// Instance unique de la queue
 const transcriptionQueue = new TranscriptionQueue();
 
-/**
- * Effectue l'appel API à Whisper
- * @param {string} audioFilePath - Chemin du fichier audio
- * @returns {Promise<string>} La transcription
- */
 async function callWhisperAPI(audioFilePath) {
   const formData = new FormData();
-  const audioStream = fs.createReadStream(audioFilePath);
-  formData.append("audio_file", audioStream);
+  formData.append("audio_file", fs.createReadStream(audioFilePath), {
+    filename: "audio.wav",
+    contentType: "audio/wav",
+  });
 
-  const response = await fetch(
-    `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
-    {
-      method: "POST",
-      body: formData,
-      headers: {
-        ...formData.getHeaders(),
-      },
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/asr?language=${API_LANGUAGE}&output=json`,
+      {
+        method: "POST",
+        body: formData,
+        headers: {
+          ...formData.getHeaders(),
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error(`Erreur HTTP ${response.status}: ${errorText}`);
+      throw new Error(`Erreur HTTP ${response.status}: ${errorText}`);
     }
-  );
 
-  if (!response.ok) {
-    throw new Error(`Erreur HTTP: ${response.status}`);
+    const result = await response.json();
+
+    if (!result || !result.text) {
+      logger.warn("La transcription renvoyée est vide");
+      return "";
+    }
+
+    return result.text;
+  } catch (error) {
+    logger.error(
+      `Erreur détaillée lors de l'appel à Whisper: ${error.message}`
+    );
+    throw error;
   }
-
-  const result = await response.json();
-
-  if (!result || !result.text) {
-    logger.warn("La transcription renvoyée est vide.");
-    return "";
-  }
-
-  return result.text;
 }
 
-/**
- * Transcrit un fichier audio en utilisant l'API Whisper.
- * Les requêtes sont mises en queue si une transcription est déjà en cours.
- *
- * @param {string} audioFilePath Chemin vers le fichier audio à transcrire.
- * @returns {Promise<string>} La transcription obtenue.
- */
 async function transcribeAudio(audioFilePath) {
   logger.info(`Ajout à la queue de transcription : ${audioFilePath}`);
 
   try {
-    // Enqueue la tâche de transcription
-    const transcription = await transcriptionQueue.enqueue(() => {
+    // Vérifier que le fichier existe
+    await fs.promises.access(audioFilePath);
+
+    // Afficher la taille du fichier
+    const stats = await fs.promises.stat(audioFilePath);
+    logger.info(`Taille du fichier audio : ${stats.size} octets`);
+
+    const transcription = await transcriptionQueue.enqueue(async () => {
       logger.info(`Début de la transcription de l'audio : ${audioFilePath}`);
       return callWhisperAPI(audioFilePath);
     });
 
-    logger.info("Transcription réalisée avec succès.");
+    logger.info("Transcription réalisée avec succès");
     return transcription;
   } catch (error) {
     logger.error(
