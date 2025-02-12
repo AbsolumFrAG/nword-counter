@@ -103,7 +103,7 @@ async function processAudio(userId, opusStream) {
     logger.info(`Transcription pour l'utilisateur ${userId}: ${transcription}`);
 
     if (transcription) {
-      const nWordRegex = /\b(n[ie]g(?:g(?:a|er)|ro|nouf)s?)\b/gi;
+      const nWordRegex = /\b(n[ieé]g(?:g(?:a|er)|ro|nouf)s?)\b/gi;
       const matches = transcription.match(nWordRegex);
       if (matches) {
         const count = matches.length;
