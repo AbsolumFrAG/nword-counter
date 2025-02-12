@@ -8,6 +8,7 @@ const prism = require("prism-media");
 const whisper = require("../utils/whisper");
 const logger = require("../utils/logger");
 const db = require("../utils/db");
+require("events").defaultMaxListeners = Infinity;
 
 const streamPipeline = promisify(pipeline);
 
