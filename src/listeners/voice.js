@@ -133,7 +133,7 @@ function setupVoiceListeners(connection) {
   connection.receiver.speaking.on("start", async (userId) => {
     logger.info(`L'utilisateur ${userId} a commencé à parler.`);
     const opusStream = connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 },
+      end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
     });
 
     opusStream.setMaxListeners(0);
@@ -146,6 +146,7 @@ function setupVoiceListeners(connection) {
 
     opusStream.on("end", () => {
       logger.info(`Le flux audio de ${userId} s'est terminé.`);
+      opusStream.unpipe(passThrough);
       passThrough.end();
     });
 
