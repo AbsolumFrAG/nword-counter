@@ -19,7 +19,7 @@ jobs:
         
     - name: Build and push Docker images
       run: |
-        docker-compose build
+        docker compose build
         docker tag nword-counter_app ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
         
