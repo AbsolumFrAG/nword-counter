@@ -1,0 +1,35 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ master ]
+    
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        
+    - name: Build and push Docker images
+      run: |
+        docker-compose build
+        docker tag nword-counter_app ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
+        
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          cd /root/nword-counter
+          docker compose pull
+          docker compose up -d --force-recreate app
