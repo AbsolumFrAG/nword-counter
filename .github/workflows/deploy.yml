@@ -20,11 +20,11 @@ jobs:
     - name: Build and push Docker images
       run: |
         docker compose build
-        docker tag nword-counter_app ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
+        docker tag nword-counter-app ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/nword-counter:latest
         
     - name: Deploy to server
-      uses: appleboy/ssh-action@v1.0.3
+      uses: appleboy/ssh-action@v1.2.0
       with:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
