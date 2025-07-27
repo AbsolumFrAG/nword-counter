@@ -9,7 +9,9 @@
       "Bash(pnpm rebuild:*)",
       "Bash(pnpm remove:*)",
       "Bash(pnpm add:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

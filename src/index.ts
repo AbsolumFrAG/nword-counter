@@ -1,9 +1,10 @@
-import { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, CommandInteraction, VoiceChannel } from 'discord.js';
-import { joinVoiceChannel, VoiceConnection, VoiceConnectionStatus, getVoiceConnection, EndBehaviorType } from '@discordjs/voice';
+import { EndBehaviorType, getVoiceConnection, joinVoiceChannel, VoiceConnection, VoiceConnectionStatus } from '@discordjs/voice';
+import { ChatInputCommandInteraction, Client, EmbedBuilder, GatewayIntentBits, SlashCommandBuilder, VoiceChannel } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { SpeechRecognitionService } from './speechRecognition';
-import { pipeline, Transform } from 'stream';
 import * as prism from 'prism-media';
+import { pipeline, Transform } from 'stream';
+import { DatabaseService } from './database';
+import { SpeechRecognitionService } from './speechRecognition';
 
 // Load environment variables
 dotenv.config();
@@ -17,15 +18,30 @@ const client = new Client({
     ]
 });
 
-// In-memory storage for word counts
-const wordCounts = new Map<string, number>();
-
 // Speech recognition service
 const speechService = new SpeechRecognitionService();
+
+// Database service
+const dbService = new DatabaseService();
 
 // Bot ready event
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user?.tag}!`);
+
+    // Initialize database
+    try {
+        const dbConnected = await dbService.testConnection();
+        if (dbConnected) {
+            await dbService.initialize();
+            console.log('Database initialized successfully');
+        } else {
+            console.error('Failed to connect to database');
+            process.exit(1);
+        }
+    } catch (error) {
+        console.error('Failed to initialize database:', error);
+        process.exit(1);
+    }
 
     // Initialize speech recognition
     try {
@@ -46,7 +62,22 @@ client.once('ready', async () => {
             .setDescription('Disconnect the bot from the voice channel'),
         new SlashCommandBuilder()
             .setName('leaderboard')
-            .setDescription('Afficher le classement des mots interdits')
+            .setDescription('Afficher le classement des mots interdits'),
+        new SlashCommandBuilder()
+            .setName('stats')
+            .setDescription('Afficher les statistiques du serveur'),
+        new SlashCommandBuilder()
+            .setName('reset')
+            .setDescription('Réinitialiser le classement')
+            .addStringOption(option =>
+                option.setName('type')
+                    .setDescription('Type de réinitialisation')
+                    .setRequired(true)
+                    .addChoices(
+                        { name: 'Mes scores', value: 'user' },
+                        { name: 'Tout le serveur (admin)', value: 'guild' }
+                    )
+            )
     ];
 
     try {
@@ -59,7 +90,7 @@ client.once('ready', async () => {
 
 // Handle slash commands
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isCommand()) return;
+    if (!interaction.isChatInputCommand()) return;
 
     const { commandName } = interaction;
 
@@ -69,11 +100,15 @@ client.on('interactionCreate', async (interaction) => {
         await handleDisconnect(interaction);
     } else if (commandName === 'leaderboard') {
         await handleLeaderboard(interaction);
+    } else if (commandName === 'stats') {
+        await handleStats(interaction);
+    } else if (commandName === 'reset') {
+        await handleReset(interaction);
     }
 });
 
 // Connect command handler
-async function handleConnect(interaction: CommandInteraction): Promise<void> {
+async function handleConnect(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server!', ephemeral: true });
         return;
@@ -109,7 +144,7 @@ async function handleConnect(interaction: CommandInteraction): Promise<void> {
 }
 
 // Disconnect command handler
-async function handleDisconnect(interaction: CommandInteraction): Promise<void> {
+async function handleDisconnect(interaction: ChatInputCommandInteraction): Promise<void> {
     if (!interaction.guild) {
         await interaction.reply({ content: 'This command can only be used in a server!', ephemeral: true });
         return;
@@ -127,35 +162,110 @@ async function handleDisconnect(interaction: CommandInteraction): Promise<void> 
 }
 
 // Leaderboard command handler
-async function handleLeaderboard(interaction: CommandInteraction): Promise<void> {
-    if (wordCounts.size === 0) {
-        await interaction.reply({ content: 'Aucune détection pour le moment !', ephemeral: false });
+async function handleLeaderboard(interaction: ChatInputCommandInteraction): Promise<void> {
+    if (!interaction.guild) {
+        await interaction.reply({ content: 'Cette commande ne peut être utilisée que dans un serveur !', ephemeral: true });
         return;
     }
 
-    // Sort users by count
-    const sortedCounts = Array.from(wordCounts.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10); // Top 10
+    try {
+        const rankings = await dbService.getLeaderboard(interaction.guild.id, 10);
 
-    const embed = new EmbedBuilder()
-        .setTitle('Leaderboard - N-word')
-        .setColor(0xFF0000)
-        .setTimestamp();
+        if (rankings.length === 0) {
+            await interaction.reply({ content: 'Aucune détection pour le moment !', ephemeral: false });
+            return;
+        }
 
-    let description = '';
-    sortedCounts.forEach(([userId, count], index) => {
-        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-        description += `${medal} <@${userId}> - **${count}** times\n`;
-    });
+        const embed = new EmbedBuilder()
+            .setTitle('🏆 Classement - Mots interdits')
+            .setColor(0xFF0000)
+            .setTimestamp()
+            .setFooter({ text: `Serveur: ${interaction.guild.name}` });
 
-    embed.setDescription(description || 'No data available');
+        let description = '';
+        rankings.forEach((ranking, index) => {
+            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+            const lastDetection = new Date(ranking.last_detection).toLocaleDateString('fr-FR');
+            description += `${medal} <@${ranking.user_id}> - **${ranking.count}** fois _(${lastDetection})_\n`;
+        });
 
-    await interaction.reply({ embeds: [embed] });
+        embed.setDescription(description);
+
+        await interaction.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in leaderboard command:', error);
+        await interaction.reply({ content: 'Erreur lors de la récupération du classement.', ephemeral: true });
+    }
+}
+
+// Stats command handler
+async function handleStats(interaction: ChatInputCommandInteraction): Promise<void> {
+    if (!interaction.guild) {
+        await interaction.reply({ content: 'Cette commande ne peut être utilisée que dans un serveur !', ephemeral: true });
+        return;
+    }
+
+    try {
+        const stats = await dbService.getGuildStats(interaction.guild.id);
+
+        const embed = new EmbedBuilder()
+            .setTitle('📊 Statistiques du serveur')
+            .setColor(0x00AE86)
+            .setTimestamp()
+            .setFooter({ text: `Serveur: ${interaction.guild.name}` })
+            .addFields(
+                { name: '🔢 Total des détections', value: stats.totalDetections.toString(), inline: true },
+                { name: '👥 Utilisateurs uniques', value: stats.uniqueUsers.toString(), inline: true },
+                { name: '📈 Moyenne par utilisateur', value: stats.averagePerUser.toFixed(1), inline: true }
+            );
+
+        if (stats.topUser) {
+            embed.addFields({ name: '👑 Champion actuel', value: `<@${stats.topUser}>`, inline: false });
+        }
+
+        await interaction.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in stats command:', error);
+        await interaction.reply({ content: 'Erreur lors de la récupération des statistiques.', ephemeral: true });
+    }
+}
+
+// Reset command handler
+async function handleReset(interaction: ChatInputCommandInteraction): Promise<void> {
+    if (!interaction.guild) {
+        await interaction.reply({ content: 'Cette commande ne peut être utilisée que dans un serveur !', ephemeral: true });
+        return;
+    }
+
+    const resetType = interaction.options.getString('type');
+
+    try {
+        if (resetType === 'user') {
+            const success = await dbService.resetUserCount(interaction.user.id, interaction.guild.id);
+            if (success) {
+                await interaction.reply({ content: '✅ Votre score a été réinitialisé !', ephemeral: true });
+            } else {
+                await interaction.reply({ content: 'Aucun score à réinitialiser.', ephemeral: true });
+            }
+        } else if (resetType === 'guild') {
+            // Check if user has admin permissions
+            const member = interaction.guild.members.cache.get(interaction.user.id);
+            if (!member?.permissions.has('Administrator')) {
+                await interaction.reply({ content: '❌ Seuls les administrateurs peuvent réinitialiser le classement du serveur.', ephemeral: true });
+                return;
+            }
+
+            const resetCount = await dbService.resetGuildCounts(interaction.guild.id);
+            await interaction.reply({ content: `✅ Classement du serveur réinitialisé ! ${resetCount} utilisateur(s) affecté(s).`, ephemeral: false });
+        }
+    } catch (error) {
+        console.error('Error in reset command:', error);
+        await interaction.reply({ content: 'Erreur lors de la réinitialisation.', ephemeral: true });
+    }
 }
 
 // Function to start listening to voice
-function startListening(connection: VoiceConnection, _voiceChannel: VoiceChannel): void {
+function startListening(connection: VoiceConnection, voiceChannel: VoiceChannel): void {
     console.log('Starting to listen for audio in voice channel...');
 
     // Get the receiver from the connection
@@ -212,17 +322,8 @@ function startListening(connection: VoiceConnection, _voiceChannel: VoiceChannel
             monoConverter,
             new Transform({
                 transform(chunk: Buffer, _encoding, callback) {
-                    // Process audio chunk with Vosk
-                    const text = speechService.processAudioChunk(userId, chunk);
-                    if (text) {
-                        console.log(`User ${userId} said: "${text}"`);
-
-                        // Check for target words
-                        if (speechService.detectTargetWords(text)) {
-                            incrementWordCount(userId);
-                            console.log(`Detected target word from user ${userId}`);
-                        }
-                    }
+                    // Feed audio chunk to Vosk for processing (no real-time text output)
+                    speechService.processAudioChunk(userId, chunk);
                     callback();
                 }
             }),
@@ -231,15 +332,15 @@ function startListening(connection: VoiceConnection, _voiceChannel: VoiceChannel
                     console.error('Pipeline error:', err);
                 }
 
-                // Get final result when stream ends
+                // Get final result when user finishes speaking
                 const finalText = speechService.getFinalResult(userId);
-                if (finalText) {
-                    console.log(`User ${userId} final text: "${finalText}"`);
+                if (finalText && finalText.trim()) {
+                    console.log(`User ${userId} finished speaking: "${finalText}"`);
 
                     // Check final text for target words
                     if (speechService.detectTargetWords(finalText)) {
-                        incrementWordCount(userId);
-                        console.log(`Detected target word from user ${userId} in final text`);
+                        incrementWordCount(userId, voiceChannel.guild.id);
+                        console.log(`Detected target word from user ${userId}: "${finalText}"`);
                     }
                 }
             }
@@ -248,9 +349,13 @@ function startListening(connection: VoiceConnection, _voiceChannel: VoiceChannel
 }
 
 // Function to increment word count for a user
-function incrementWordCount(userId: string): void {
-    const currentCount = wordCounts.get(userId) || 0;
-    wordCounts.set(userId, currentCount + 1);
+async function incrementWordCount(userId: string, guildId: string): Promise<void> {
+    try {
+        const newCount = await dbService.incrementWordCount(userId, guildId);
+        console.log(`User ${userId} in guild ${guildId} now has ${newCount} detections`);
+    } catch (error) {
+        console.error('Error incrementing word count:', error);
+    }
 }
 
 // Login the bot
